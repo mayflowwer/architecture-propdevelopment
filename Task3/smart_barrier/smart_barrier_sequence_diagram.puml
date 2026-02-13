@@ -1,0 +1,29 @@
+@startuml
+
+participant "Транспортное средство" as c
+participant "Устройство" as device
+participant "Приложение управления девайсами" as provider_app
+participant "Tenant-Core-App" as app 
+participant db 
+
+c -> device : Подъезжает к шлакбауму
+device -> device : Фиксирует событие появления ТС в зоне видимости, идентифицирует номер ТС
+device -> provider_app : Отправляет запрос на пропуск ТС [MQTT/TCP]
+provider_app -> provider_app : Шифрует номер ТС
+provider_app -> provider_app : Подписывает сообщение сертификатом, выданным CA PropDevelopment
+provider_app -> app : Передает данные [HTTPS/TLS]
+app -> app : Проверяет подлинность сертификата
+alt Сертификат не валидный
+    app -> app : Завершить соединение
+    app -> provider_app : Завершение сессии
+    provider_app -> device : Отказать в открытии шлакбаума
+else Сертификат валидный
+    app -> app : Расшифровывает данные, получает номер ТС
+    app -> db : Проверить наличия ТС в вайт-листе
+    db --> app : Результат проверки
+    app --> provider_app : Результат проверки
+    provider_app --> device : Открыть шлакбаум
+    device --> c : Открыть шлакбаум
+end
+
+@enduml

@@ -1,0 +1,21 @@
+@startuml
+
+participant person as p
+participant intercom_device as device
+participant intercom_app
+participant tenant_core_app as app 
+participant db 
+
+p -> device : Подходит к двери
+device -> device : Фиксирует событие появления человека в зоне видимости девайса, получает биометрические данные
+device -> intercom_app : Отправляет запрос на вход человека(биометрические данные)
+intercom_app -> intercom_app : Генерирует биометрический шаблон
+intercom_app -> app : Отправляет запрос на верификацию (биометрический шаблон)
+app -> app : Зашифровывает биометрический шаблон 
+app -> db : Проверить биометрический шаблон
+db --> app : Результат проверки
+app --> intercom_app : Результат проверки
+intercom_app --> device : Открыть дверь / Отказать
+device --> p : Открыть дверь / Отказать
+
+@enduml
