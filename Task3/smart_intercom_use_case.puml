@@ -1,0 +1,108 @@
+@startuml
+title Подключение услуги умного домофона (улучшенная версия)
+
+participant client as "Клиент\n(Приложение)"
+participant tenant_core_app as "tenant-core-app\n(Ваш Backend)"
+participant tenant_core_db as "tenant-core-db"
+participant consent_service as "Consent Service\n(GDPR Compliance)"
+participant biometric_service as "Biometric Service"
+participant kms as "KMS\n(Key Management)"
+participant provider_app as "Provider API"
+
+== Выбор услуги ==
+
+client -> tenant_core_app : GET /api/intercom/services
+tenant_core_app --> client : Список услуг:\n1. Стандарт (домофон↔домофон)\n2. Умный (+ уведомления в app)\n3. Биометрия (+ face recognition)
+
+client -> tenant_core_app : POST /api/intercom/services/subscribe\n{service_type, location_data}
+
+alt service_type == "standard"
+    tenant_core_app -> provider_app : POST /api/v1/subscriptions\n{user_id, location, type: "basic", notify: false}
+    provider_app --> tenant_core_app : {subscription_id, status: "active"}
+    tenant_core_app --> client : Услуга подключена
+    
+else service_type == "smart"
+    tenant_core_app -> provider_app : POST /api/v1/subscriptions\n{user_id, location, type: "smart",\nnotify: true, webhook_url}
+    provider_app --> tenant_core_app : {subscription_id, status: "active"}
+    tenant_core_app --> client : Услуга подключена
+    
+else service_type == "biometric"
+    
+    == Получение согласия ==
+    
+    tenant_core_app --> client : Требуется согласие на биометрию\n{consent_text, consent_version: "1.0"}
+    
+    client -> client : Показать пользователю:\n- Что собираем (фото лица)\n- Для чего (доступ к дому)\n- Как храним (зашифровано)\n- Кто видит (провайдер)\n- Как отозвать
+    
+    alt Пользователь согласен
+        client -> tenant_core_app : POST /api/consent/biometric\n{accepted: true, consent_version: "1.0"}
+        
+        tenant_core_app -> consent_service : Сохранить согласие
+        consent_service -> tenant_core_db : INSERT consent_log\n(user_id, type: "biometric",\nip, timestamp, consent_text)
+        consent_service --> tenant_core_app : {consent_id}
+        
+        == Сбор биометрии ==
+        
+        tenant_core_app --> client : Начать процесс регистрации биометрии
+        
+        client -> client : Камера: снять фото лица\n(3-5 снимков с разных углов)
+        
+        note over client
+            Опция 1: Генерировать шаблон на клиенте
+            (если есть ML библиотека)
+            
+            Опция 2: Отправить фото на backend
+            (если клиент слабый)
+        end note
+        
+        alt Опция 1: Клиент генерирует шаблон
+            client -> client : Извлечь face descriptor\nusing TensorFlow.js\n→ [0.23, -0.41, 0.88, ...]
+            client -> tenant_core_app : POST /api/biometric/register\n{template: [...], quality: 0.95}
+            
+        else Опция 2: Backend генерирует шаблон
+            client -> tenant_core_app : POST /api/biometric/register\n{face_images: [base64, ...]}
+            tenant_core_app -> biometric_service : Извлечь шаблон из фото
+            biometric_service --> tenant_core_app : {template: [...], quality: 0.95}
+        end
+        
+        == Шифрование и сохранение ==
+        
+        tenant_core_app -> tenant_core_app : Валидировать качество\nquality >= 0.8
+        
+        tenant_core_app -> kms : Получить ключ для user_id
+        kms --> tenant_core_app : {encryption_key}
+        
+        tenant_core_app -> tenant_core_app : Зашифровать шаблон\nAES-256-GCM
+        
+        tenant_core_app -> tenant_core_db : INSERT biometric_templates\n(user_id, template_encrypted,\ntype: "face", quality, consent_id)
+        tenant_core_db --> tenant_core_app : {biometric_id}
+        
+        == Генерация токена доступа ==
+        
+        tenant_core_app -> tenant_core_app : Сгенерировать JWT токен:\n{\n  sub: user_id,\n  biometric_id: bio_id,\n  scope: "biometric:verify",\n  exp: now + 1 year\n}
+        
+        tenant_core_app -> tenant_core_db : Сохранить токен\n(для возможности отзыва)
+        
+        == Регистрация у провайдера ==
+        
+        tenant_core_app -> provider_app : POST /api/v1/subscriptions\n{\n  user_id,\n  location,\n  type: "biometric",\n  notify: true,\n  webhook_url,\n  biometric: {\n    access_token: "jwt_token",\n    verify_endpoint: "https://your-api/biometric/verify"\n  }\n}
+        
+        provider_app -> provider_app : Сохранить настройки\nдля location
+        
+        provider_app --> tenant_core_app : {subscription_id, status: "active"}
+        
+        tenant_core_app -> tenant_core_db : UPDATE subscription\nstatus = "active"
+        
+        tenant_core_app --> client : Услуга с биометрией активна
+        
+    else Пользователь отказался
+        client -> tenant_core_app : POST /api/consent/biometric\n{accepted: false}
+        
+        tenant_core_app -> consent_service : Записать отказ
+        consent_service -> tenant_core_db : INSERT consent_log\n(user_id, type: "biometric",\naccepted: false, reason: "user_declined")
+        
+        tenant_core_app --> client : Биометрическая услуга недоступна\nПредложить: Умная услуга без биометрии
+    end
+end
+
+@enduml

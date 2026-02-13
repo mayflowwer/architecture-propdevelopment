@@ -1,0 +1,24 @@
+@startuml
+
+!include <C4/C4_Context.puml>
+!include <C4/C4_Container.puml>
+
+
+Person(client, "Собственник", "Клиент")
+System_Boundary(system_boundary,"PropDevelopment"){
+        Container(front_app, "Витрина сервисов для собственников", Mobile App(iOS, Android), "Мобильные приложения для собственников")
+    Container(auth_service, "auth-service-1", KeyCloak, "Сервис аутентификации покупателей")
+    Container(tenant_core_app, "tenant-core-app", "Container: Kotlin, SpringBoot", "Приложение для предоставления услуг собственникам")
+}
+System_Ext(partner_system1, "Система умного домофона", "Сервис умного домофона")
+System_Ext(partner_system2, "Система умного шлакбаума", "Сервис умного шлакбаума")
+
+
+Rel(client, front_app, "Использует")
+Rel(front_app, auth_service, "Аутентификация")
+Rel(auth_service, front_app, "Токен пользователя")
+Rel(auth_service, tenant_core_app, "Токен пользователя")
+Rel(tenant_core_app, partner_system1, "REST, HTTP")
+Rel(tenant_core_app, partner_system2, "REST, HTTP")
+
+@enduml
